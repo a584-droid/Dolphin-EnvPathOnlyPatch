@@ -16,10 +16,14 @@
 #include <KUrlComboBox>
 
 #include <QAbstractButton>
+#include <QDir>
+#include <QEvent>
+#include <QFileInfo>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
+#include <QProcessEnvironment>
 
 DolphinUrlNavigator::DolphinUrlNavigator(QWidget *parent)
     : DolphinUrlNavigator(QUrl(), parent)
@@ -51,6 +55,7 @@ DolphinUrlNavigator::DolphinUrlNavigator(const QUrl &url, QWidget *parent)
     DolphinUrlNavigatorsController::registerDolphinUrlNavigator(this);
 
     connect(this, &KUrlNavigator::returnPressed, this, &DolphinUrlNavigator::slotReturnPressed);
+    editor()->lineEdit()->installEventFilter(this);
 
     auto readOnlyBadge = new QLabel();
     readOnlyBadge->setPixmap(QIcon::fromTheme(QStringLiteral("emblem-readonly")).pixmap(12, 12));
@@ -144,6 +149,71 @@ void DolphinUrlNavigator::slotReturnPressed()
     if (!GeneralSettings::editableUrl()) {
         setUrlEditable(false);
     }
+}
+
+bool DolphinUrlNavigator::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched != editor()->lineEdit() || event->type() != QEvent::KeyPress) {
+        return KUrlNavigator::eventFilter(watched, event);
+    }
+
+    const auto *keyEvent = static_cast<QKeyEvent *>(event);
+    if (keyEvent->key() != Qt::Key_Return && keyEvent->key() != Qt::Key_Enter) {
+        return KUrlNavigator::eventFilter(watched, event);
+    }
+
+    const QString userInput = editor()->lineEdit()->text();
+    if (!userInput.startsWith(QLatin1Char('$'))) {
+        return KUrlNavigator::eventFilter(watched, event);
+    }
+
+    int variableNameEnd = 1;
+    while (variableNameEnd < userInput.size()) {
+        const QChar ch = userInput.at(variableNameEnd);
+        if (!ch.isLetterOrNumber() && ch != QLatin1Char('_')) {
+            break;
+        }
+        ++variableNameEnd;
+    }
+
+    const QString variableName = userInput.mid(1, variableNameEnd - 1);
+    if (variableName.isEmpty()) {
+        return KUrlNavigator::eventFilter(watched, event);
+    }
+
+    const QString variableValue = QProcessEnvironment::systemEnvironment().value(variableName);
+    if (!(variableValue.startsWith(QLatin1Char('/')) || variableValue.startsWith(QStringLiteral("~/")))) {
+        return KUrlNavigator::eventFilter(watched, event);
+    }
+
+    const QString suffix = userInput.mid(variableNameEnd);
+    QList<QUrl> urls;
+    constexpr int maxPathsPerWindow = 10;
+    const QStringList envPaths = variableValue.split(QLatin1Char(':'), Qt::SkipEmptyParts);
+    for (const QString &envPath : envPaths) {
+        const QString basePath = envPath.startsWith(QStringLiteral("~/")) ? QDir::home().filePath(envPath.mid(2)) : envPath;
+        const QString candidatePath = QDir::cleanPath(basePath + suffix);
+        if (QFileInfo::exists(candidatePath)) {
+            urls.append(QUrl::fromLocalFile(candidatePath));
+        }
+    }
+
+    if (urls.isEmpty()) {
+        return KUrlNavigator::eventFilter(watched, event);
+    }
+
+    setLocationUrl(urls.takeFirst());
+    constexpr int maxAdditionalTabs = maxPathsPerWindow - 1;
+    for (int i = 0; i < urls.size(); ++i) {
+        if (i < maxAdditionalTabs) {
+            Q_EMIT tabRequested(urls.at(i));
+            continue;
+        }
+
+        Dolphin::openNewWindow(urls.mid(i, maxPathsPerWindow), this);
+        i += maxPathsPerWindow - 1;
+    }
+    return true;
 }
 
 void DolphinUrlNavigator::keyPressEvent(QKeyEvent *keyEvent)

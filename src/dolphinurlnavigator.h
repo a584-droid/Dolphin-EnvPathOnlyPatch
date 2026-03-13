@@ -100,6 +100,8 @@ Q_SIGNALS:
     void requestToLoseFocus();
 
 protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
     /**
      * Return focus back to the view when pressing Escape and this would have no other effect (e.g. deselecting or changing edit mode).
      */
