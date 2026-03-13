@@ -182,15 +182,21 @@ bool DolphinUrlNavigator::eventFilter(QObject *watched, QEvent *event)
     }
 
     const QString variableValue = QProcessEnvironment::systemEnvironment().value(variableName);
-    if (!(variableValue.startsWith(QLatin1Char('/')) || variableValue.startsWith(QStringLiteral("~/")))) {
+    if (variableValue.isEmpty()) {
         return KUrlNavigator::eventFilter(watched, event);
     }
 
     const QString suffix = userInput.mid(variableNameEnd);
     QList<QUrl> urls;
     constexpr int maxPathsPerWindow = 10;
-    const QStringList envPaths = variableValue.split(QLatin1Char(':'), Qt::SkipEmptyParts);
+    const QStringList envPaths = variableValue.split(QDir::listSeparator(), Qt::SkipEmptyParts);
     for (const QString &envPath : envPaths) {
+        if (!(QDir::isAbsolutePath(envPath) || envPath.startsWith(QStringLiteral("~/")))) {
+            // Ignore non-path entries (e.g. values accidentally mixed into path lists)
+            // and keep processing valid path entries.
+            continue;
+        }
+
         const QString basePath = envPath.startsWith(QStringLiteral("~/")) ? QDir::home().filePath(envPath.mid(2)) : envPath;
         const QString candidatePath = QDir::cleanPath(basePath + suffix);
         if (QFileInfo::exists(candidatePath)) {
